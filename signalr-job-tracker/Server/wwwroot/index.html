@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SignalR Job Tracker</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+    table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+    td, th { padding: .4rem; border-bottom: 1px solid #ddd; text-align: left; }
+    #log { background: #f4f4f4; padding: .5rem; height: 12rem; overflow: auto; font: 12px monospace; }
+  </style>
+</head>
+<body>
+  <h1>SignalR Job Tracker</h1>
+  <p>State: <b id="state">-</b> &middot; ConnectionId: <code id="connId">-</code></p>
+
+  <form id="startForm">
+    <label for="name">Job name</label>
+    <input id="name" value="report" maxlength="40">
+    <button>Start</button>
+    <button type="button" id="drop">Drop my connection (test reconnect)</button>
+  </form>
+
+  <table>
+    <thead><tr><th>Job</th><th>Status</th><th>Progress</th><th></th></tr></thead>
+    <tbody id="jobs"></tbody>
+  </table>
+
+  <h2>Log</h2>
+  <pre id="log"></pre>
+
+  <!-- Official client, npm package @microsoft/signalr -->
+  <script src="https://cdn.jsdelivr.net/npm/@microsoft/signalr@10.0.0/dist/browser/signalr.min.js"></script>
+  <script>
+    const watched = new Set(); // job ids this tab follows (its groups)
+    const $ = id => document.getElementById(id);
+    const log = msg => $("log").textContent = `${new Date().toLocaleTimeString()} ${msg}\n` + $("log").textContent;
+
+    const connection = new signalR.HubConnectionBuilder()
+      .withUrl("/hubs/jobs")
+      .withAutomaticReconnect() // retries after 0, 2, 10, 30 s, then gives up
+      .build();
+
+    // Server -> client. Names match IJobClient methods on the server.
+    connection.on("JobStarted", job => { log(`JobStarted ${job.name}`); render(job); });
+    connection.on("JobUpdated", job => { log(`JobUpdated ${job.name} ${job.progress}%`); render(job); });
+
+    connection.onreconnecting(err => { showState(); log(`reconnecting: ${err}`); });
+    connection.onreconnected(async id => { showState(); log(`reconnected, new ConnectionId ${id}`); await resync(); });
+    connection.onclose(err => { showState(); log(`closed: ${err}`); });
+
+    // New connection = new ConnectionId = no groups. Re-join groups and fetch the state we missed.
+    async function resync() {
+      for (const job of await connection.invoke("GetJobs")) render(job);
+      for (const id of watched) render(await connection.invoke("Watch", id));
+    }
+
+    async function toggleWatch(id) {
+      if (watched.has(id)) { watched.delete(id); await connection.invoke("Unwatch", id); }
+      else { watched.add(id); render(await connection.invoke("Watch", id)); }
+      render(jobs.get(id));
+    }
+
+    const jobs = new Map();
+    function render(job) {
+      if (!job) return;
+      jobs.set(job.id, job);
+      let row = $(job.id);
+      if (!row) {
+        row = $("jobs").insertRow();
+        row.id = job.id;
+        for (let i = 0; i < 4; i++) row.insertCell();
+        row.cells[2].append(document.createElement("progress"));
+        const btn = document.createElement("button");
+        btn.onclick = () => toggleWatch(job.id);
+        row.cells[3].append(btn);
+      }
+      row.cells[0].textContent = job.name; // textContent, not innerHTML: names come from other users
+      row.cells[1].textContent = job.status;
+      Object.assign(row.cells[2].firstChild, { max: 100, value: job.progress });
+      row.cells[3].firstChild.textContent = watched.has(job.id) ? "Unwatch" : "Watch";
+    }
+
+    function showState() {
+      $("state").textContent = connection.state;
+      $("connId").textContent = connection.connectionId ?? "-";
+    }
+
+    $("startForm").onsubmit = async e => {
+      e.preventDefault();
+      const job = await connection.invoke("StartJob", $("name").value); // client -> server, returns a value
+      watched.add(job.id);
+      render(await connection.invoke("Watch", job.id));
+    };
+    $("drop").onclick = () => connection.invoke("DropMe").catch(err => log(`DropMe: ${err}`));
+
+    (async () => {
+      await connection.start();
+      showState();
+      log("connected");
+      await resync();
+    })().catch(err => log(`start failed: ${err}`));
+  </script>
+</body>
+</html>
