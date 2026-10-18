@@ -16,8 +16,8 @@ connection.Reconnecting += error =>
     return Task.CompletedTask;
 };
 
-// Exercise: unlike the browser client, this one does NOT re-join groups after reconnect.
-// Watch what happens to [update] lines after DropMe, then fix it here.
+// Exercise: unlike the browser client, this one does NOT resync after reconnect.
+// Updates sent during the outage are lost. Fix it here: print the current state from GetJobs.
 connection.Reconnected += connectionId =>
 {
     Console.WriteLine($"[reconnected] new ConnectionId {connectionId}");
@@ -36,8 +36,7 @@ while (Console.ReadLine() is { Length: > 0 } line)
         continue;
     }
 
-    var job = await connection.InvokeAsync<JobDto>("StartJob", line);
-    await connection.InvokeAsync<JobDto?>("Watch", job.Id);
+    await connection.InvokeAsync<JobDto>("StartJob", line);
 }
 
 await connection.DisposeAsync();

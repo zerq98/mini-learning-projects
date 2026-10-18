@@ -11,7 +11,7 @@ HTTP is request -> response. The server only answers when the client asks. For t
 SignalR provides that channel plus an RPC layer on top of it:
 
 - the client calls a server method by name (`invoke("StartJob", "report")`),
-- the server calls a "method" on the client by name (`Clients.Group(id).JobUpdated(job)` -> `connection.on("JobUpdated", ...)`).
+- the server calls a "method" on the client by name (`Clients.All.JobUpdated(job)` -> `connection.on("JobUpdated", ...)`).
 
 You do not write message parsing, routing, pings or transport-level reconnects. The library does that.
 
@@ -29,7 +29,7 @@ You do not write message parsing, routing, pings or transport-level reconnects. 
 
 A hub is a class that looks like a controller but works in both directions.
 
-- `JobHub.StartJob`, `Watch`, `Unwatch`, `GetJobs`, `DropMe` - the client calls these on the server (`Server/JobHub.cs`).
+- `JobHub.StartJob`, `GetJobs`, `DropMe` - the client calls these on the server (`Server/JobHub.cs`).
 - `IJobClient.JobStarted`, `JobUpdated` - the server calls these on the client. The interface has no C# implementation. SignalR turns the call into a message with `target: "JobUpdated"`, and the client handles it in `connection.on("JobUpdated", ...)`.
 
 The method name is the whole contract. A typo in `connection.on("JobUpdate", ...)` gives no error, just silence. It is the most common beginner mistake.
@@ -96,16 +96,16 @@ To send from outside a hub, use `IHubContext<JobHub, IJobClient>` from DI (`Serv
 
 | Call | Who receives | In this project |
 |---|---|---|
-| `Clients.All` | everyone connected | `JobStarted` |
+| `Clients.All` | everyone connected | `JobStarted`, `JobUpdated` |
 | `Clients.Caller` | only the caller (hub only) | - |
 | `Clients.Others` | everyone except the caller (hub only) | experiment 10 |
 | `Clients.Client(connectionId)` | one connection | - |
-| `Clients.Group(name)` | group members | `JobUpdated` |
+| `Clients.Group(name)` | group members | not used, README experiment 10 |
 | `Clients.User(userId)` | all connections of an authenticated user | requires authentication, out of scope |
 
 ## 7. Groups
 
-A group is a named list of `ConnectionId`s. In this project group name = job id (`JobHub.Watch`).
+A group is a named list of `ConnectionId`s. This project does not use groups (every client gets every job via `Clients.All`); a natural use would be group name = job id, so only clients watching a job get its progress (README experiment 10).
 
 Facts you need to know:
 
@@ -135,14 +135,15 @@ That is why `index.html` has `resync()` called in `onreconnected`:
 
 ```js
 async function resync() {
-  for (const job of await connection.invoke("GetJobs")) render(job);       // what I missed from Clients.All
-  for (const id of watched) render(await connection.invoke("Watch", id));  // rejoin groups + current state
+  for (const job of await connection.invoke("GetJobs")) render(job); // current state of everything I missed
 }
 ```
 
-The order in `Watch` is deliberate: **join the group first, then read the state**. The other way around leaves a gap: an update sent between reading and joining is lost. In this order the worst case is receiving the same value twice, and `render` is idempotent.
+`render` is idempotent, so getting the same value from `GetJobs` and from a `JobUpdated` arriving right after does no harm.
 
-This pattern (state on the server + "join and fetch" after reconnect) is the standard one. SignalR is a notification channel, not the source of truth.
+If you use groups, the order matters: **join the group first, then read the state**. The other way around leaves a gap: an update sent between reading and joining is lost.
+
+This pattern (state on the server + "fetch (and rejoin) after reconnect") is the standard one. SignalR is a notification channel, not the source of truth.
 
 ### Kick vs failure
 

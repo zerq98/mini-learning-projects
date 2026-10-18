@@ -10,8 +10,6 @@ public class JobStore(IHubContext<JobHub, IJobClient> hub)
 
     public IEnumerable<Job> All() => _jobs.Values;
 
-    public Job? Get(Guid id) => _jobs.GetValueOrDefault(id);
-
     public Job Start(string name)
     {
         name = string.IsNullOrWhiteSpace(name) ? "job" : name.Trim();
@@ -31,7 +29,7 @@ public class JobStore(IHubContext<JobHub, IJobClient> hub)
             await Task.Delay(1000);
             job = job with { Status = progress < 100 ? "Running" : "Done", Progress = progress };
             _jobs[job.Id] = job;
-            await hub.Clients.Group(job.Id.ToString()).JobUpdated(job);
+            await hub.Clients.All.JobUpdated(job); // every connected client gets every job's progress
         }
     }
 }
